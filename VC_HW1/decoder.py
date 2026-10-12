@@ -21,7 +21,8 @@ class BitReader:
             raise ValueError("unexpected end of valid payload")
         value = 0
         for _ in range(count):
-            value = (value << 1) | ((self.data[self.pos // 8] >> (7 - self.pos % 8)) & 1)
+            value = (value << 1) | (
+                (self.data[self.pos // 8] >> (7 - self.pos % 8)) & 1)
             self.pos += 1
         return value
 
@@ -37,38 +38,55 @@ class BitReader:
 
 
 def matrix(values, precision=None):
-    if values is None: return "[not available]"
-    kwargs = dict(separator=", ", max_line_width=140)
-    if precision is not None: kwargs.update(precision=precision, floatmode="fixed")
+    if values is None:
+        return "[not available]"
+    kwargs = {"separator": ", ", "max_line_width": 140}
+    if precision is not None:
+        kwargs.update(precision=precision, floatmode="fixed")
     return np.array2string(np.asarray(values), **kwargs)
 
 
 class Trace:
     """Save reached results, just like the encoder trace."""
+
     def __init__(self, path, block_index):
-        self.path=path; self.block_index=block_index; self.data={}; self.error=None
-    def update(self, **items): self.data.update(items)
-    def fail(self, exc): self.error=f"{type(exc).__name__}: {exc}"
+        self.path = path
+        self.block_index = block_index
+        self.data = {}
+        self.error = None
+
+    def update(self, **items):
+        self.data.update(items)
+
+    def fail(self, exc):
+        self.error = f"{type(exc).__name__}: {exc}"
+
     def token_lines(self):
-        tokens=self.data.get("tokens")
-        if tokens is None: return "[not available]"
-        lines=[]
+        tokens = self.data.get("tokens")
+        if tokens is None:
+            return "[not available]"
+        lines = []
         for i, token in enumerate(tokens):
             if token[0] == "EOB":
                 _, _, first, last = token
-                lines.append(f"token[{i:02d}]=EOB                    bits={first}:{last} prefix=111111111")
+                lines.append(
+                    f"token[{i:02d}]=EOB                    bits={first}:{last} prefix=111111111")
             else:
                 _, value, first, last, s = token
-                lines.append(f"token[{i:02d}]=VALUE({value}) category={s} bits={first}:{last}")
+                lines.append(
+                    f"token[{i:02d}]=VALUE({value}) category={s} bits={first}:{last}")
         return "\n".join(lines)
+
     def write(self):
-        d=self.data; missing="[not available]"
-        info=(f'width={d.get("w", missing)}\nheight={d.get("h", missing)}\n'
-              f'block_count={d.get("blocks", missing)}\nselected_block_index={self.block_index}\n'
-              f'selected_block_top_left={d.get("location", missing)}')
-        start=d.get("start"); end=d.get("end")
-        bit_text=missing if start is None or end is None else f"start_bit={start}\nend_bit={end}\nbit_count={end-start}"
-        sections=[
+        d = self.data
+        missing = "[not available]"
+        info = (f'width={d.get("w", missing)}\nheight={d.get("h", missing)}\n'
+                f'block_count={d.get("blocks", missing)}\nselected_block_index={self.block_index}\n'
+                f'selected_block_top_left={d.get("location", missing)}')
+        start = d.get("start")
+        end = d.get("end")
+        bit_text = missing if start is None or end is None else f"start_bit={start}\nend_bit={end}\nbit_count={end - start}"
+        sections = [
             ("IMAGE INFORMATION", info),
             ("HEADER", f'valid_payload_bits={d.get("valid_bits", missing)}'),
             ("DECODED VALUE / EOB TOKENS", self.token_lines()),
@@ -79,14 +97,18 @@ class Trace:
             ("INVERSE DCT + LEVEL SHIFT", matrix(d.get("spatial"), 4)),
             ("OUTPUT BLOCK", matrix(d.get("output"))),
             ("SELECTED BLOCK BITS", bit_text),
-            ("BIT COUNTS", f'header_bits=32\nvalid_payload_bits={d.get("valid_bits", missing)}\n'
-             f'final_padding_bits={d.get("padding_bits", missing)}\ntotal_bits={d.get("total_bits", missing)}\n'
-             f'file_size_bytes={d.get("file_size", missing)}'),
+            ("BIT COUNTS", (
+                f'header_bits=32\nvalid_payload_bits={d.get("valid_bits", missing)}\n'
+                f'final_padding_bits={d.get("padding_bits", missing)}\ntotal_bits={d.get("total_bits", missing)}\n'
+                f'file_size_bytes={d.get("file_size", missing)}')),
         ]
         # Successful output keeps the original reference format.
-        if self.error: sections.insert(0, ("TRACE STATUS", f"stopped: {self.error}"))
-        text="\n\n".join(f"===== DECODER {name} =====\n{body}" for name, body in sections)+"\n"
-        Path(self.path).write_text(text, encoding="utf-8"); print(text, end="")
+        if self.error:
+            sections.insert(0, ("TRACE STATUS", f"stopped: {self.error}"))
+        text = "\n\n".join(
+            f"===== DECODER {name} =====\n{body}" for name, body in sections) + "\n"
+        Path(self.path).write_text(text, encoding="utf-8")
+        print(text, end="")
 
 
 def read_value(reader, s):
@@ -119,49 +141,73 @@ def reconstruct_block(zigzagged, C=DCT_BASIS):
 
 
 def decode(input_bin, output_png, width=512, height=512, trace=None, block_index=0):
-    if trace: trace.update(w=width, h=height)
+    if trace:
+        trace.update(w=width, h=height)
     if width <= 0 or height <= 0 or width % 8 or height % 8:
         raise ValueError("width and height must be positive multiples of 8")
-    blocks=width*height//64
-    if trace: trace.update(blocks=blocks)
-    if not 0 <= block_index < blocks: raise ValueError("invalid block index")
+    blocks = width * height // 64
+    if trace:
+        trace.update(blocks=blocks)
+    if not 0 <= block_index < blocks:
+        raise ValueError("invalid block index")
 
-    raw=Path(input_bin).read_bytes()
-    if trace: trace.update(file_size=len(raw), total_bits=len(raw)*8)
-    if len(raw) < HEADER.size: raise ValueError("file is shorter than 4-byte header")
-    valid_bits=HEADER.unpack(raw[:HEADER.size])[0]; padding_bits=(-valid_bits)%8
-    if trace: trace.update(valid_bits=valid_bits, padding_bits=padding_bits)
-    if len(raw) != HEADER.size+(valid_bits+7)//8: raise ValueError("file size mismatch")
-    if padding_bits and raw[-1] & ((1 << padding_bits)-1): raise ValueError("nonzero final padding bits")
-    reader=BitReader(raw[HEADER.size:], valid_bits)
-    reconstruction=np.empty((height, width), dtype=np.uint8); index=0
+    raw = Path(input_bin).read_bytes()
+    if trace:
+        trace.update(file_size=len(raw), total_bits=len(raw) * 8)
+    if len(raw) < HEADER.size:
+        raise ValueError("file is shorter than 4-byte header")
+    valid_bits = HEADER.unpack(raw[:HEADER.size])[0]
+    padding_bits = (-valid_bits) % 8
+    if trace:
+        trace.update(valid_bits=valid_bits, padding_bits=padding_bits)
+    if len(raw) != HEADER.size + (valid_bits + 7) // 8:
+        raise ValueError("file size mismatch")
+    if padding_bits and raw[-1] & ((1 << padding_bits) - 1):
+        raise ValueError("nonzero final padding bits")
+    reader = BitReader(raw[HEADER.size:], valid_bits)
+    reconstruction = np.empty((height, width), dtype=np.uint8)
+    index = 0
     for top in range(0, height, 8):
         for left in range(0, width, 8):
-            start=reader.pos
-            if trace and index == block_index: trace.update(location=f"(y={top}, x={left})", start=start)
-            zigzagged, tokens=read_block(reader)
+            start = reader.pos
             if trace and index == block_index:
-                trace.update(zigzagged=zigzagged, tokens=tokens, end=reader.pos)
-            qf, dequantized, after_columns, spatial, block=reconstruct_block(zigzagged)
+                trace.update(location=f"(y={top}, x={left})", start=start)
+            zigzagged, tokens = read_block(reader)
             if trace and index == block_index:
-                trace.update(qf=qf, dequantized=dequantized, after_columns=after_columns, spatial=spatial, output=block)
-            reconstruction[top:top+8, left:left+8]=block
+                trace.update(zigzagged=zigzagged,
+                             tokens=tokens, end=reader.pos)
+            qf, dequantized, after_columns, spatial, block = reconstruct_block(
+                zigzagged)
+            if trace and index == block_index:
+                trace.update(qf=qf, dequantized=dequantized,
+                             after_columns=after_columns, spatial=spatial, output=block)
+            reconstruction[top:top + 8, left:left + 8] = block
             index += 1
-    if reader.pos != valid_bits: raise ValueError("unused valid payload bits remain")
+    if reader.pos != valid_bits:
+        raise ValueError("unused valid payload bits remain")
     Image.fromarray(reconstruction).save(output_png)
 
 
 def main():
-    p=argparse.ArgumentParser(); p.add_argument("input_bin"); p.add_argument("output_png")
-    p.add_argument("--width", type=int, default=512); p.add_argument("--height", type=int, default=512)
-    p.add_argument("--trace"); p.add_argument("--block-index", type=int, default=0); args=p.parse_args()
-    trace=Trace(args.trace, args.block_index) if args.trace else None
-    try: decode(args.input_bin, args.output_png, args.width, args.height, trace, args.block_index)
+    p = argparse.ArgumentParser()
+    p.add_argument("input_bin")
+    p.add_argument("output_png")
+    p.add_argument("--width", type=int, default=512)
+    p.add_argument("--height", type=int, default=512)
+    p.add_argument("--trace")
+    p.add_argument("--block-index", type=int, default=0)
+    args = p.parse_args()
+    trace = Trace(args.trace, args.block_index) if args.trace else None
+    try:
+        decode(args.input_bin, args.output_png, args.width,
+               args.height, trace, args.block_index)
     except Exception as exc:
-        if trace: trace.fail(exc)
+        if trace:
+            trace.fail(exc)
         raise
     finally:
-        if trace: trace.write()
+        if trace:
+            trace.write()
 
 
 if __name__ == "__main__":
