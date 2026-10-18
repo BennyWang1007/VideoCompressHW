@@ -115,7 +115,15 @@ def read_value(reader, s):
     # TODO: read s amplitude bits. For a negative value, return
     # amplitude - (2**s - 1). VALUE(0) has no amplitude bits.
     # When complete, return: value
-    raise NotImplementedError("TODO: decode a VALUE amplitude")
+    # raise NotImplementedError("TODO: decode a VALUE amplitude")
+    if not (0 <= s <= 11):
+        raise ValueError("invalid category for VALUE")
+    if s == 0:
+        return 0
+    amplitude = reader.read_bits(s)
+    if amplitude < (1 << (s - 1)):
+        return amplitude - (1 << s) + 1
+    return amplitude
 
 
 def read_block(reader):
@@ -124,7 +132,20 @@ def read_block(reader):
     # EOB: ("EOB", None, start_bit, end_bit)
     # VALUE: ("VALUE", value, start_bit, end_bit, category)
     # When complete, return: coeffs, tokens
-    raise NotImplementedError("TODO: decode one VALUE/EOB block")
+    coeffs = np.zeros(64, dtype=np.int32)
+    tokens = []
+    index = 0
+    while index < 64:
+        start = reader.pos
+        s = reader.read_token()
+        if s is None:  # EOB
+            tokens.append(("EOB", None, start, reader.pos))
+            break
+        value = read_value(reader, s)
+        coeffs[index] = value
+        tokens.append(("VALUE", value, start, reader.pos, s))
+        index += 1
+    return coeffs, tokens
 
 
 def reconstruct_block(zigzagged, C=DCT_BASIS):
@@ -137,7 +158,14 @@ def reconstruct_block(zigzagged, C=DCT_BASIS):
     #                  level restoration, before rounding and clipping
     #   block:         8x8 final uint8 pixel block, with values in [0, 255]
     # When complete, return: qf, dequantized, after_columns, spatial, block
-    raise NotImplementedError("TODO: reconstruct one 8x8 block")
+    flat = np.zeros(64, dtype=np.int32)
+    flat[ZIGZAG] = zigzagged                 # inverse zigzag
+    qf = flat.reshape(8, 8)
+    dequantized = qf * Q
+    after_columns = C.T @ dequantized        # stage 1: column-wise 1D IDCT
+    spatial = after_columns @ C + 128.0      # stage 2: row-wise 1D IDCT + level restore
+    block = np.clip(np.rint(spatial), 0, 255).astype(np.uint8)
+    return qf, dequantized, after_columns, spatial, block
 
 
 def decode(input_bin, output_png, width=512, height=512, trace=None, block_index=0):

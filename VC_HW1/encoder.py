@@ -115,7 +115,22 @@ def transform_block(block, C=DCT_BASIS):
     #   zigzag:     sequence of 64 integer coefficients in zigzag order
     # When complete, return:
     # return shifted, after_rows, F, QF, zigzag
-    raise NotImplementedError("TODO: implement transform_block")
+
+    # Make sure the input block is a numpy array of shape (8, 8)
+    block_array = np.asarray(block)
+    if block_array.shape != (8, 8):
+        raise ValueError("block must have shape (8, 8)")
+    if C.shape != (8, 8):
+        raise ValueError("DCT basis must have shape (8, 8)")
+
+    shifted = block.astype(np.float64) - 128.0
+    after_rows = shifted @ C.T
+    F = C @ after_rows
+    QF = np.rint(F / Q).astype(np.int32)
+    if np.any(np.abs(QF) > 2047):
+        raise ValueError("quantized coefficient out of range (|v| > 2047)")
+    zigzag = QF.reshape(-1)[ZIGZAG]
+    return shifted, after_rows, F, QF, zigzag
 
 
 def encode_block_symbols(zigzag):
@@ -123,7 +138,26 @@ def encode_block_symbols(zigzag):
     # ("VALUE", v) and ("EOB", None) pairs.  An all-zero block uses only EOB;
     # append EOB only when the last nonzero value is before index 63.
     # When complete, return: symbols
-    raise NotImplementedError("TODO: implement VALUE/EOB symbol sequence")
+
+    # Make sure the input zigzag is a numpy array of shape (64,)
+    coefficients = np.asarray(zigzag)
+    if coefficients.size != 64:
+        raise ValueError("zigzag must contain exactly 64 coefficients")
+    if not np.issubdtype(coefficients.dtype, np.integer):
+        if np.any(coefficients != np.rint(coefficients)):
+            raise ValueError("zigzag coefficients must be integers")
+        coefficients = np.rint(coefficients).astype(np.int64)
+    else:
+        coefficients = coefficients.astype(np.int64)
+
+    nonzero_indices = np.flatnonzero(coefficients)
+    if nonzero_indices.size == 0:
+        return [("EOB", None)]
+    last = int(nonzero_indices[-1])
+    symbols = [("VALUE", int(v)) for v in coefficients[:last + 1]]
+    if last < 63:
+        symbols.append(("EOB", None))
+    return symbols
 
 
 def write_symbol(writer, token, arg):
@@ -132,7 +166,33 @@ def write_symbol(writer, token, arg):
     # s, write VALUE_CODE[s], then write no amplitude bits for s=0, v itself
     # for v>0, or v + (2**s - 1) for v<0.  For EOB, write EOB_CODE.
     # When complete, return: bits
-    raise NotImplementedError("TODO: write VALUE or EOB bits")
+    if token == "EOB":
+        if arg is not None:
+            raise ValueError("EOB cannot have an argument")
+        code, length = EOB_CODE
+        writer.write_bits(code, length)
+        return format(code, f"0{length}b")
+
+    if token != "VALUE" or not isinstance(arg, (int, np.integer)):
+        raise ValueError("token must be 'VALUE' with an integer argument")
+
+    v = int(arg)
+    # s = abs(v).bit_length()          # = floor(log2|v|)+1, and 0 for v=0
+
+    if v == 0:
+        s = 0
+    else:
+        s = int(np.floor(np.log2(abs(v)))) + 1
+
+    code, length = VALUE_CODE[s]
+    writer.write_bits(code, length)
+    bits = format(code, f"0{length}b")
+    if s > 0:
+        # Compute the amplitude bits for the value
+        amp = v if v > 0 else v + (1 << s) - 1
+        writer.write_bits(amp, s)
+        bits += format(amp, f"0{s}b")
+    return bits
 
 
 def encode(input_png, output_bin, trace=None, block_index=0):
